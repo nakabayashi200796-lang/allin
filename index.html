@@ -79,7 +79,7 @@ body {
   grid-template-rows: 1fr auto 1fr;
   align-items: center;
   gap: 6px;
-  padding: 24px 4%;
+  padding: 20px 4%;
   position: relative;
   overflow: hidden;
 }
@@ -116,7 +116,12 @@ body {
 .seat.lead .bar i { background: var(--brass); }
 .seat.lead .pct { color: var(--brass); }
 .seat.win .plate { border-color: var(--brass); box-shadow: 0 0 0 1px var(--brass), 0 0 22px color-mix(in srgb, var(--brass) 55%, transparent); }
-.hand { font-size: .8rem; font-weight: 700; color: var(--muted); min-height: 1.2em; letter-spacing: .04em; }
+/* 役の名前は勝負がついたら、勝率のバーの場所に出す */
+.done .plate .pct { display: none; }
+.done .plate { gap: 4px; }
+.plate .hand { display: none; flex: 1; min-width: 0; font-size: .8rem; font-weight: 700; color: var(--muted); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.done .plate .bar { display: none; }
+.done .plate .hand { display: block; }
 .seat.win .hand { color: var(--brass); }
 
 .cards { display: flex; gap: 6px; justify-content: center; }
@@ -133,7 +138,9 @@ body {
   font-family: var(--rank);
   transition: transform .3s, opacity .3s, filter .3s;
 }
-.seat .card { width: calc(var(--cw) * 1.1); }
+.seat .card { width: var(--hw, calc(var(--cw) * 1.1)); }
+.seat .card .rk { font-size: calc(var(--hw, calc(var(--cw) * 1.1)) * .34); }
+.seat .card .st { font-size: calc(var(--hw, calc(var(--cw) * 1.1)) * .46); }
 .card.red { color: var(--red); }
 .card .rk { position: absolute; top: 5%; left: 9%; font-size: calc(var(--cw) * .36); line-height: 1; }
 .card .st { font-size: calc(var(--cw) * .5); line-height: 1; margin-top: 24%; font-family: "Segoe UI Symbol", "Apple Symbols", sans-serif; }
@@ -155,7 +162,7 @@ body {
 
 .mid { display: flex; flex-direction: column; align-items: center; gap: 8px; position: relative; z-index: 1; }
 .street { font-family: var(--display); font-weight: 700; letter-spacing: .3em; font-size: .8rem; color: var(--muted); min-height: 1em; }
-.result { text-align: center; min-height: 3.2em; display: flex; flex-direction: column; justify-content: center; }
+.result { text-align: center; height: 4.4rem; display: flex; flex-direction: column; justify-content: center; }
 .result b { font-family: var(--display); font-weight: 900; font-size: 2.6rem; line-height: .95; letter-spacing: .06em; color: var(--brass); text-shadow: 0 2px 0 rgba(0,0,0,.45); }
 .result b.lose { color: var(--text); }
 .result small { font-size: .82rem; color: var(--text); opacity: .85; margin-top: 4px; }
@@ -163,7 +170,7 @@ body {
 /* 縦が短い画面（iPhone SE・8 など）は、結果の文字とチップを少し小さくする */
 @media (max-height: 740px) {
   .app { gap: 10px; }
-  .result { min-height: 2.6em; }
+  .result { height: 3.8rem; }
   .result b { font-size: 2rem; }
   .who, .pct { font-size: 1rem; }
   .go { width: 78px; height: 78px; font-size: 1.1rem; }
@@ -241,8 +248,7 @@ body {
   <div class="table">
     <div class="felt" id="felt">
       <section class="seat cpu" id="seat-cpu">
-        <div class="plate"><span class="who">CPU</span><span class="bar"><i id="bar-cpu"></i></span><span class="pct" id="pct-cpu">–</span></div>
-        <div class="hand" id="hand-cpu"></div>
+        <div class="plate"><span class="who">CPU</span><span class="bar"><i id="bar-cpu"></i></span><span class="hand" id="hand-cpu"></span><span class="pct" id="pct-cpu">–</span></div>
         <div class="cards" id="hole-cpu"></div>
       </section>
 
@@ -253,8 +259,7 @@ body {
       </section>
 
       <section class="seat you" id="seat-you">
-        <div class="plate"><span class="who">YOU</span><span class="bar"><i id="bar-you"></i></span><span class="pct" id="pct-you">–</span></div>
-        <div class="hand" id="hand-you"></div>
+        <div class="plate"><span class="who">YOU</span><span class="bar"><i id="bar-you"></i></span><span class="hand" id="hand-you"></span><span class="pct" id="pct-you">–</span></div>
         <div class="cards" id="hole-you"></div>
       </section>
     </div>
@@ -604,10 +609,37 @@ body {
     $('go').setAttribute('aria-label', label === 'ALL<br>IN' ? 'オールインで勝負する' : label + 'を開く');
   }
 
+  // カードの大きさを、テーブルに収まるいちばん大きい幅に合わせる（画面の大きさで変わる）
+  function fitCards() {
+    const root = document.documentElement.style;
+    const cs = getComputedStyle(felt);
+    const padV = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const padH = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const gap = parseFloat(cs.rowGap) || 0;
+    const availH = felt.clientHeight - padV - gap * 2 - 6;
+    const maxW = Math.min(110, (felt.clientWidth - padH - 4 * 6 - 8) / 5);   // 場の5枚が横に並ぶ幅
+    const used = () => $('seat-cpu').offsetHeight + document.querySelector('.mid').offsetHeight + $('seat-you').offsetHeight;
+    const search = (lo, hi, apply) => {
+      for (let k = 0; k < 14; k++) {
+        const m = (lo + hi) / 2;
+        apply(m);
+        if (used() <= availH) lo = m; else hi = m;
+      }
+      apply(Math.floor(lo));
+      return Math.floor(lo);
+    };
+    // まず場の5枚（横幅で上限が決まる）、次に手札の2枚を縦の残りいっぱいまで大きくする
+    const cw = search(30, Math.max(30, maxW), m => { root.setProperty('--cw', m + 'px'); root.setProperty('--hw', m * 1.1 + 'px'); });
+    search(cw * 1.1, Math.max(cw * 1.1, Math.min(130, cw * 1.6)), m => root.setProperty('--hw', m + 'px'));
+  }
+  addEventListener('resize', fitCards);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitCards);
+
   // 開いたときは裏向きで待つ
   $('hole-you').replaceChildren(cardEl('back'), cardEl('back'));
   $('hole-cpu').replaceChildren(cardEl('back'), cardEl('back'));
   $('board').replaceChildren(...[0,1,2,3,4].map(() => cardEl(null)));
+  fitCards();
 
   $('go').addEventListener('click', () => {
     SFX.unlock(); SFX.play('chip');
