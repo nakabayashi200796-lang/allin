@@ -186,14 +186,47 @@ body {
 .go:active { transform: translateY(5px); box-shadow: 0 0 0 4px var(--chip), 0 1px 0 4px #6e1019, 0 4px 10px rgba(0,0,0,.6); }
 .go:disabled { filter: grayscale(.5) brightness(.7); cursor: default; }
 .go:focus-visible { outline: 3px solid var(--brass); outline-offset: 6px; }
+/* リバー前の溜め：最後の1枚がじわっと光って震える */
+.card.tease { animation: tease .7s ease-in-out infinite; }
+@keyframes tease {
+  0%, 100% { transform: none; box-shadow: 0 3px 8px rgba(0,0,0,.45), 0 0 0 0 rgba(227,189,98,0); }
+  50% { transform: translateY(-3px) rotate(-1.5deg); box-shadow: 0 6px 14px rgba(0,0,0,.5), 0 0 18px 3px rgba(227,189,98,.55); }
+}
+.street.tense { color: var(--brass); animation: beat .7s ease-in-out infinite; }
+@keyframes beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.12); } 30% { transform: scale(1); } 45% { transform: scale(1.06); } }
+
+.sound {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  right: 10px;
+  z-index: 5;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.45);
+  color: var(--text);
+  display: grid; place-items: center;
+  cursor: pointer;
+}
+.sound svg { width: 22px; height: 22px; }
+.sound .off { display: none; }
+.sound[aria-pressed="false"] .on { display: none; }
+.sound[aria-pressed="false"] .off { display: block; }
+.sound[aria-pressed="false"] { color: var(--muted); }
+.sound:focus-visible { outline: 3px solid var(--brass); outline-offset: 2px; }
+
 .hint { text-align: center; font-size: .75rem; color: var(--muted); margin-top: -6px; min-height: 1em; }
 
 @media (prefers-reduced-motion: reduce) {
-  .card.flip, .card.drop, .result.pop { animation: none; }
+  .card.flip, .card.drop, .result.pop, .card.tease, .street.tense { animation: none; }
 }
 </style>
 </head>
 <body>
+<button class="sound" id="sound" type="button" aria-pressed="true" aria-label="音を鳴らす">
+  <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg>
+  <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M17 9l5 6M22 9l-5 6"/></svg>
+</button>
 <div class="app">
   <div class="table">
     <div class="felt" id="felt">
@@ -361,6 +394,83 @@ body {
     return el;
   }
 
+  // 効果音：音声ファイルは使わず、その場で合成して鳴らす（電波が無くても鳴る）
+  const SFX = (() => {
+    let ctx = null, master = null, nbuf = null;
+    let on = true;
+    try { on = localStorage.getItem('allin:sound') !== 'off'; } catch (e) {}
+
+    function unlock() {   // iPhone はボタンを押した瞬間にしか音の準備をさせてくれない
+      if (!on) return;
+      if (!ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        ctx = new AC();
+        master = ctx.createGain(); master.gain.value = 0.8; master.connect(ctx.destination);
+        nbuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+        const ch = nbuf.getChannelData(0);
+        for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+      }
+      if (ctx.state === 'suspended') ctx.resume();
+    }
+    function env(t, vol, dur, attack = 0.005) {
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      g.connect(master);
+      return g;
+    }
+    function noise(t, dur, freq, q, vol, freqTo) {   // シュッ・カチャッ
+      const s = ctx.createBufferSource(); s.buffer = nbuf;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = q;
+      f.frequency.setValueAtTime(freq, t);
+      if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+      s.connect(f).connect(env(t, vol, dur, 0.004));
+      s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.05);
+    }
+    function tone(t, freq, dur, type, vol, freqTo, attack) {
+      const o = ctx.createOscillator(); o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+      o.connect(env(t, vol, dur, attack || 0.008));
+      o.start(t); o.stop(t + dur + 0.05);
+    }
+    const sounds = {
+      chip(t) {   // チップを置く「カチャッ」
+        noise(t, 0.05, 4200, 1.4, 0.55); tone(t, 2650, 0.07, 'triangle', 0.2);
+        noise(t + 0.07, 0.04, 3600, 1.4, 0.35); tone(t + 0.07, 2300, 0.05, 'triangle', 0.14);
+      },
+      deal(t) { noise(t, 0.11, 1800, 0.9, 0.4, 4200); },                  // 配る「シュッ」
+      flip(t) { noise(t, 0.08, 3000, 1.1, 0.45, 1800); tone(t + 0.03, 900, 0.04, 'triangle', 0.08); },  // めくる「パタッ」
+      tick(t) { tone(t, 1320, 0.07, 'sine', 0.12); tone(t + 0.06, 1760, 0.08, 'sine', 0.08); },         // 勝率が変わった
+      heart(t) {  // 心臓の鼓動（ドクン）
+        tone(t, 80, 0.2, 'sine', 0.9, 42, 0.01); noise(t, 0.05, 160, 1, 0.25);
+        tone(t + 0.21, 70, 0.18, 'sine', 0.6, 38, 0.01);
+      },
+      win(t) {    // 勝ち：上がっていくファンファーレ
+        [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(t + i * 0.11, f, 0.28, 'triangle', 0.26));
+        [523.25, 659.25, 783.99, 1046.5].forEach(f => { tone(t + 0.5, f, 1.3, 'triangle', 0.14); tone(t + 0.5, f, 1.0, 'square', 0.025); });
+        for (let i = 0; i < 6; i++) noise(t + 0.5 + i * 0.07, 0.05, 5000, 2, 0.12);   // チップがジャラッ
+      },
+      lose(t) {   // 負け：下がっていく低い音
+        [392, 349.23, 293.66].forEach((f, i) => { tone(t + i * 0.28, f, 0.42, 'triangle', 0.24); tone(t + i * 0.28, f / 2, 0.42, 'sine', 0.18); });
+        tone(t + 0.84, 196, 0.9, 'triangle', 0.22, 185);
+      },
+      chop(t) { tone(t, 659.25, 0.22, 'triangle', 0.2); tone(t + 0.2, 659.25, 0.35, 'triangle', 0.2); }
+    };
+    return {
+      unlock,
+      play(name) { if (!on || !ctx) return; sounds[name](ctx.currentTime + 0.01); },
+      get on() { return on; },
+      set(v) {
+        on = v;
+        try { localStorage.setItem('allin:sound', v ? 'on' : 'off'); } catch (e) {}
+        if (v) unlock(); else if (ctx) ctx.suspend();
+      }
+    };
+  })();
+
   const felt = $('felt');
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let timers = [];
@@ -394,8 +504,10 @@ body {
     const Y = [d[0], d[2]], C = [d[1], d[3]];
     const board = [d[5], d[6], d[7], d[9], d[11]];
 
-    $('hole-you').replaceChildren(...Y.map(x => cardEl(x, 'drop')));
-    $('hole-cpu').replaceChildren(...C.map(x => cardEl(x, 'drop')));
+    // You→CPU→You→CPU の順に1枚ずつ配る
+    const dealt = (x, i) => { const el = cardEl(x, 'drop'); el.style.animationDelay = (i * 160) + 'ms'; return el; };
+    $('hole-you').replaceChildren(dealt(Y[0], 0), dealt(Y[1], 2));
+    $('hole-cpu').replaceChildren(dealt(C[0], 1), dealt(C[1], 3));
     $('board').replaceChildren(...board.map(() => cardEl('back')));
 
     // 先に全部の段階の勝率を出しておく（配った直後の見積もりが一番重い）
@@ -403,12 +515,14 @@ body {
     const ry = best7(Y.concat(board)), rc = best7(C.concat(board));
     const res = cmp(ry.score, rc.score);
 
-    const reveal = (from, to, name) => {
-      for (let i = from; i < to; i++) $('board').children[i].replaceWith(cardEl(board[i], 'flip'));
-      $('street').textContent = name;
+    const reveal = i => {
+      $('board').children[i].replaceWith(cardEl(board[i], 'flip'));
+      SFX.play('flip');
     };
+    const street = name => { $('street').textContent = name; $('street').classList.remove('tense'); };
     const finish = () => {
-      $('street').textContent = 'SHOWDOWN';
+      street('SHOWDOWN');
+      SFX.play(res > 0 ? 'win' : res < 0 ? 'lose' : 'chop');
       showEquity({ you: res > 0 ? 100 : res === 0 ? 50 : 0, cpu: res < 0 ? 100 : res === 0 ? 50 : 0 });
       $('hand-you').textContent = handName(ry.score);
       $('hand-cpu').textContent = handName(rc.score);
@@ -430,14 +544,27 @@ body {
     };
 
     if (reduce) {
-      reveal(0, 5, ''); finish(); return;
+      for (let i = 0; i < 5; i++) $('board').children[i].replaceWith(cardEl(board[i]));
+      finish(); return;
     }
+    // 全部で約10秒。最後の1枚（リバー）の前で鼓動を鳴らして溜める
     const at = (ms, fn) => timers.push(setTimeout(fn, ms));
-    at(700, () => { $('street').textContent = 'PRE-FLOP'; showEquity(eq[0]); });
-    at(1900, () => { reveal(0, 3, 'FLOP'); showEquity(eq[1]); });
-    at(3100, () => { reveal(3, 4, 'TURN'); showEquity(eq[2]); });
-    at(4300, () => { reveal(4, 5, 'RIVER'); });
-    at(4900, finish);
+    [0, 160, 320, 480].forEach(ms => at(ms, () => SFX.play('deal')));
+    at(1300, () => { street('PRE-FLOP'); showEquity(eq[0]); SFX.play('tick'); });
+    at(3000, () => { street('FLOP'); reveal(0); });
+    at(3200, () => reveal(1));
+    at(3400, () => reveal(2));
+    at(3900, () => { showEquity(eq[1]); SFX.play('tick'); });
+    at(5400, () => { street('TURN'); reveal(3); });
+    at(5900, () => { showEquity(eq[2]); SFX.play('tick'); });
+    at(7100, () => {
+      street('RIVER');
+      $('street').classList.add('tense');
+      $('board').children[4].classList.add('tease');
+    });
+    [7100, 7800, 8500, 9200].forEach(ms => at(ms, () => SFX.play('heart')));
+    at(9900, () => { street('RIVER'); reveal(4); });
+    at(10500, finish);
   }
 
   // 開いたときは裏向きで待つ
@@ -445,7 +572,18 @@ body {
   $('hole-cpu').replaceChildren(cardEl('back'), cardEl('back'));
   $('board').replaceChildren(...[0,1,2,3,4].map(() => cardEl(null)));
 
-  $('go').addEventListener('click', () => requestAnimationFrame(() => setTimeout(play, 0)));
+  $('go').addEventListener('click', () => {
+    SFX.unlock(); SFX.play('chip');
+    setTimeout(play, 250);   // チップを置く音と沈み込みを先に見せてから配る
+  });
+
+  const soundBtn = $('sound');
+  const paintSound = () => {
+    soundBtn.setAttribute('aria-pressed', String(SFX.on));
+    soundBtn.setAttribute('aria-label', SFX.on ? '音を消す' : '音を鳴らす');
+  };
+  soundBtn.addEventListener('click', () => { SFX.set(!SFX.on); paintSound(); if (SFX.on) SFX.play('tick'); });
+  paintSound();
 
   if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 })();
